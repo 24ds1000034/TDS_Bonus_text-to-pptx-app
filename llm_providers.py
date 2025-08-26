@@ -64,7 +64,6 @@ def _post_anthropic(api_key, model, system, user):
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
     }
-    # Anthropic requires a single system, and then "user" content
     payload = {
         "model": model or "claude-3-5-sonnet-20240620",
         "max_tokens": 2000,
@@ -76,17 +75,13 @@ def _post_anthropic(api_key, model, system, user):
         raise ProviderError(f"Anthropic API error {r.status_code}: {r.text[:200]}")
     data = r.json()
     try:
-        # content is a list of blocks; each block may have type "text"
         parts = data["content"]
-        text = "".join([p.get("text","") for p in parts if p.get("type") == "text"])
+        text = "".join([p.get("text", "") for p in parts if p.get("type") == "text"])
     except Exception:
         raise ProviderError("Anthropic response missing text content")
     return text
 
 def _post_gemini(api_key, model, system, user):
-    # Gemini typically uses content safety and a different schema.
-    # We'll concatenate system+user into a single prompt and request JSON.
-    # Note: key is in the URL; we do not store or log it.
     model_name = model or "gemini-1.5-pro"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     headers = {"content-type": "application/json"}
@@ -106,15 +101,11 @@ def _post_gemini(api_key, model, system, user):
     return text
 
 def _coerce_json(text):
-    # Attempt to coerce provider output to JSON by trimming code fences and fixing minor trailing commas
     s = text.strip()
-    # Remove markdown fences if present
     if s.startswith("```"):
         s = re.sub(r"^```(?:json)?", "", s).strip()
         s = re.sub(r"```$", "", s).strip()
-    # Basic sanity
     if not s.startswith("{"):
-        # Try to find first JSON object
         m = re.search(r"\{.*\}", s, flags=re.S)
         if m:
             s = m.group(0)
@@ -124,9 +115,7 @@ def _coerce_json(text):
         raise ProviderError(f"Provider returned non-JSON output: {e}")
 
 def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_notes):
-    # Build user message
     user = USER_TEMPLATE.format(guidance=guidance or "(none)", input_text=input_text[:15000])
-    # Dispatch to provider
     if provider.lower() == "openai":
         raw = _post_openai(api_key, model, SYSTEM_PROMPT, user)
     elif provider.lower() == "anthropic":
@@ -135,21 +124,18 @@ def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_
         raw = _post_gemini(api_key, model, SYSTEM_PROMPT, user)
     else:
         raise ProviderError(f"Unsupported provider: {provider}")
+
     data = _coerce_json(raw)
-    # Validate and normalize
     slides = data.get("slides") or []
     if not isinstance(slides, list) or len(slides) == 0:
         raise ProviderError("No slides returned by provider.")
-    # Enforce max 30 slides
+
     slides = slides[:30]
-    # Attach include_notes; if notes missing, add empty string if include_notes True
     if include_notes:
         for s in slides:
             if "notes" not in s:
                 s["notes"] = ""
-    # Ensure layout_hint exists
     for s in slides:
-        lh = s.get("layout_hint", "")
-        if not lh:
+        if not s.get("layout_hint"):
             s["layout_hint"] = "title_and_content"
     return slides
