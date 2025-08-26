@@ -94,3 +94,4 @@ text-to-pptx-app/
 - Rate-limit & retry logic for unstable API responses.
 ```
 
+Developed by 24DS1000034-George
