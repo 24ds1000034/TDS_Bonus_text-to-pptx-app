@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Text → Template-Styled PowerPoint</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="icon" href="data:,">
+  <style>
+    .hint { color: #6b7280; font-size: 0.9rem; }
+    .card { box-shadow: 0 10px 30px rgba(0,0,0,0.08); border-radius: 1rem; }
+    .btn { transition: transform .08s ease; }
+    .btn:active { transform: scale(0.98); }
+    .brand { letter-spacing: .5px }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div class="max-w-6xl mx-auto px-4 py-8">
+    <header class="mb-8 flex items-center justify-between">
+      <h1 class="text-2xl font-semibold brand">Your Text, Your Style — Auto-Generate a Presentation</h1>
+      <a class="text-sm underline text-gray-500" href="https://opensource.org/license/mit" target="_blank" rel="noopener">MIT Licensed</a>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <section class="lg:col-span-2 card bg-white p-6">
+        <form id="genForm" method="post" action="/generate" enctype="multipart/form-data" class="space-y-5">
+          <div>
+            <label class="block text-sm font-medium mb-1">Paste your text or markdown</label>
+            <textarea name="inputText" rows="10" class="w-full border rounded-lg px-3 py-2" placeholder="# Title&#10;- bullet 1&#10;- bullet 2" required></textarea>
+            <p class="hint mt-1">We do not store your content. It is used in-memory to plan slides.</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium mb-1">Optional one-line guidance</label>
+            <input name="guidance" type="text" class="w-full border rounded-lg px-3 py-2" placeholder="e.g., turn into an investor pitch deck">
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label class="block text-sm font-medium mb-1">LLM provider</label>
+              <select name="provider" class="w-full border rounded-lg px-3 py-2">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Google Gemini</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Model (optional)</label>
+              <input name="model" type="text" class="w-full border rounded-lg px-3 py-2" placeholder="auto">
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">API key</label>
+              <input name="apiKey" type="password" class="w-full border rounded-lg px-3 py-2" placeholder="sk-..." required>
+              <p class="hint mt-1">Your key is used only for this request and never stored or logged.</p>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium mb-1">Upload PPTX/POTX template or deck</label>
+            <input name="templateFile" type="file" accept=".pptx,.potx" class="w-full border rounded-lg px-3 py-2 bg-white" required>
+            <p class="hint mt-1">We will inherit layouts, fonts, and colors from your file and reuse its images.</p>
+          </div>
+
+          <div class="flex items-center gap-4">
+            <label class="inline-flex items-center gap-2">
+              <input type="checkbox" name="includeNotes" class="h-4 w-4">
+              <span class="text-sm">Auto-create speaker notes</span>
+            </label>
+          </div>
+
+          <div class="flex gap-3 pt-2">
+            <button id="submitBtn" class="btn bg-black text-white px-4 py-2 rounded-lg">Generate .pptx</button>
+            <button id="previewBtn" type="button" class="btn border px-4 py-2 rounded-lg">Preview slide plan</button>
+          </div>
+          <div id="progress" class="hidden mt-3 text-sm text-gray-600">Processing…</div>
+        </form>
+      </section>
+
+      <aside class="card bg-white p-6">
+        <h2 class="text-lg font-medium mb-2">How it works</h2>
+        <ol class="list-decimal ml-5 space-y-2 text-sm">
+          <li>We ask your chosen LLM to map your text into a concise slide plan.</li>
+          <li>We open your PPT template to inherit styles, layouts, and theme colors.</li>
+          <li>We render slides with titles and bullets, and optionally speaker notes.</li>
+          <li>We reuse images present in your template for tasteful accents.</li>
+        </ol>
+        <p class="hint mt-3">No AI image generation is used. Keys and text are not stored.</p>
+
+        <div class="mt-6">
+          <h3 class="text-sm font-medium mb-1">Tips</h3>
+          <ul class="list-disc ml-5 text-sm space-y-1">
+            <li>Add a one-line guidance like “sales deck”, “research summary”, or “visual-heavy”.</li>
+            <li>Use a clean template with clear Title/Content layouts.</li>
+            <li>You can deploy this app to Render/Railway in minutes.</li>
+          </ul>
+        </div>
+      </aside>
+    </div>
+
+    <section id="previewPanel" class="card bg-white p-6 mt-6 hidden">
+      <h2 class="text-lg font-medium mb-3">Slide Plan Preview</h2>
+      <div id="previewList" class="space-y-3"></div>
+    </section>
+
+    <footer class="mt-10 text-center text-sm text-gray-500">
+      Built for public use. MIT Licensed.
+    </footer>
+  </div>
+
+  <script>
+    const form = document.getElementById('genForm');
+    const progress = document.getElementById('progress');
+    const previewBtn = document.getElementById('previewBtn');
+    const previewPanel = document.getElementById('previewPanel');
+    const previewList = document.getElementById('previewList');
+
+    form.addEventListener('submit', () => {
+      progress.classList.remove('hidden');
+    });
+
+    previewBtn.addEventListener('click', async () => {
+      const fd = new FormData(form);
+      progress.classList.remove('hidden');
+      try {
+        const res = await fetch('/preview', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "Preview failed");
+        previewList.innerHTML = '';
+        data.slides.forEach((s, i) => {
+          const div = document.createElement('div');
+          div.className = 'border rounded-lg p-4';
+          const bullets = (s.bullets || []).map(b => `<li>${b}</li>`).join('');
+          div.innerHTML = `<div class="text-sm text-gray-500 mb-2">Slide ${i+1} — <code>${s.layout_hint}</code></div>
+                           <div class="font-medium">${s.title || '(no title)'}</div>
+                           <ul class="list-disc ml-6 text-sm">${bullets}</ul>`;
+          previewList.appendChild(div);
+        });
+        previewPanel.classList.remove('hidden');
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        progress.classList.add('hidden');
+      }
+    });
+  </script>
+</body>
+</html>
