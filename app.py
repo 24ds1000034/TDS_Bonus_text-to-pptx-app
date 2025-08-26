@@ -112,5 +112,6 @@ def preview():
         return jsonify({"ok": False, "error": f\"Unexpected error: {e}\"}), 500
 
 if __name__ == "__main__":
-    # Never enable debug logging in production because we don't want to risk logging sensitive inputs
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    import os
+    port = int(os.getenv("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False)
