@@ -100,6 +100,30 @@ def _post_gemini(api_key, model, system, user):
         raise ProviderError("Gemini response missing text content")
     return text
 
+def _post_perplexity(api_key, model, system, user):
+    url = "https://api.perplexity.ai/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model or "sonar-medium-online",  # default model name
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ],
+        "temperature": 0.2,
+    }
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
+    if r.status_code >= 400:
+        raise ProviderError(f"Perplexity API error {r.status_code}: {r.text[:200]}")
+    data = r.json()
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except Exception:
+        raise ProviderError("Perplexity response missing content")
+    return content
+
 def _coerce_json(text):
     s = text.strip()
     if s.startswith("```"):
@@ -122,6 +146,8 @@ def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_
         raw = _post_anthropic(api_key, model, SYSTEM_PROMPT, user)
     elif provider.lower() in ("google", "gemini", "google-gemini"):
         raw = _post_gemini(api_key, model, SYSTEM_PROMPT, user)
+    elif provider.lower() == "perplexity":
+        raw = _post_perplexity(api_key, model, SYSTEM_PROMPT, user)
     else:
         raise ProviderError(f"Unsupported provider: {provider}")
 
