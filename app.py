@@ -50,20 +50,58 @@ def generate():
             return jsonify({"ok": False, "error": "Only .pptx or .potx files are supported."}), 400
         template_bytes = f.read()
 
-        # Step 1: Ask LLM for slide plan
-        try:
-            slide_plan = plan_slides_via_llm(
-                provider=provider,
-                model=model or None,
+        # Step 1: Ask LLM for slide plan (with graceful fallbacks)
+        def attempt(p, m=None):
+            return plan_slides_via_llm(
+                provider=p,
+                model=m or (model or None),
                 api_key=api_key,
                 input_text=input_text,
                 guidance=guidance,
                 include_notes=include_notes
             )
+
+        tried = []
+        slide_plan = None
+        primary = provider.lower()
+
+        try:
+            tried.append(primary)
+            slide_plan = attempt(primary)
         except ProviderError as e:
-            return jsonify({"ok": False, "error": f"LLM provider error: {e}"}), 400
-        except Exception as e:
-            return jsonify({"ok": False, "error": f"Failed to get a slide plan from LLM: {e}"}), 500
+            msg = str(e)
+            fallbacks = []
+
+            if "quota" in msg.lower() or "429" in msg or "insufficient_quota" in msg.lower():
+                fallbacks = ["perplexity", "aipipe"]
+            elif "invalid model" in msg.lower() and "perplexity" in msg.lower():
+                # try safer Perplexity model
+                try:
+                    tried.append("perplexity")
+                    slide_plan = attempt("perplexity", m="sonar-small-chat")
+                except ProviderError as e2:
+                    msg = str(e2)
+                    slide_plan = None
+                    fallbacks = ["aipipe"]
+            else:
+                fallbacks = ["perplexity", "aipipe"]
+
+            if slide_plan is None:
+                last_err = msg
+                for fb in [p for p in fallbacks if p not in tried]:
+                    tried.append(fb)
+                    try:
+                        slide_plan = attempt(fb)
+                        provider = fb
+                        break
+                    except ProviderError as e3:
+                        last_err = str(e3)
+
+                if slide_plan is None:
+                    return jsonify({
+                        "ok": False,
+                        "error": f"Failed to get a slide plan from LLM (tried {', '.join(tried)}): {last_err}"
+                    }), 400
 
         # Step 2: Build presentation
         try:
@@ -100,14 +138,59 @@ def preview():
         if not api_key:
             return jsonify({"ok": False, "error": "API key is required for the selected provider."}), 400
 
-        slide_plan = plan_slides_via_llm(
-            provider=provider,
-            model=model or None,
-            api_key=api_key,
-            input_text=input_text,
-            guidance=guidance,
-            include_notes=include_notes
-        )
+        # Same fallback strategy as /generate
+        def attempt(p, m=None):
+            return plan_slides_via_llm(
+                provider=p,
+                model=m or (model or None),
+                api_key=api_key,
+                input_text=input_text,
+                guidance=guidance,
+                include_notes=include_notes
+            )
+
+        tried = []
+        slide_plan = None
+        primary = provider.lower()
+
+        try:
+            tried.append(primary)
+            slide_plan = attempt(primary)
+        except ProviderError as e:
+            msg = str(e)
+            fallbacks = []
+
+            if "quota" in msg.lower() or "429" in msg or "insufficient_quota" in msg.lower():
+                fallbacks = ["perplexity", "aipipe"]
+            elif "invalid model" in msg.lower() and "perplexity" in msg.lower():
+                # try safer Perplexity model
+                try:
+                    tried.append("perplexity")
+                    slide_plan = attempt("perplexity", m="sonar-small-chat")
+                except ProviderError as e2:
+                    msg = str(e2)
+                    slide_plan = None
+                    fallbacks = ["aipipe"]
+            else:
+                fallbacks = ["perplexity", "aipipe"]
+
+            if slide_plan is None:
+                last_err = msg
+                for fb in [p for p in fallbacks if p not in tried]:
+                    tried.append(fb)
+                    try:
+                        slide_plan = attempt(fb)
+                        provider = fb
+                        break
+                    except ProviderError as e3:
+                        last_err = str(e3)
+
+                if slide_plan is None:
+                    return jsonify({
+                        "ok": False,
+                        "error": f"Failed to get a slide plan from LLM (tried {', '.join(tried)}): {last_err}"
+                    }), 400
+
         return jsonify({"ok": True, "slides": slide_plan})
 
     except ProviderError as e:

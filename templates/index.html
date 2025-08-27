@@ -93,7 +93,16 @@
   <div class="max-w-6xl mx-auto px-4 py-8">
     <header class="mb-8 flex items-center justify-between">
       <h1 class="text-2xl md:text-3xl font-semibold brand">Your Text, Your Style — Auto-Generate a Presentation</h1>
-      <a class="text-sm underline text-slate-600 hover:text-slate-800" href="https://opensource.org/license/mit" target="_blank" rel="noopener">MIT Licensed</a>
+      <div class="flex items-center gap-3">
+        <label class="text-sm text-slate-700">Theme</label>
+        <select id="themeSelect" class="select px-2 py-1 text-sm">
+          <option value="default" selected>Default</option>
+          <option value="ocean">Ocean</option>
+          <option value="sunset">Sunset</option>
+          <option value="forest">Forest</option>
+        </select>
+        <a class="text-sm underline text-slate-600 hover:text-slate-800" href="https://opensource.org/license/mit" target="_blank" rel="noopener">MIT Licensed</a>
+      </div>
     </header>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -113,22 +122,25 @@
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label class="block text-sm font-medium mb-1 text-slate-800">LLM provider</label>
-              <select name="provider" class="select w-full px-3 py-2">
+              <select id="providerSelect" name="provider" class="select w-full px-3 py-2">
                 <option value="aipipe">AI-Pipe</option>
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="gemini">Google Gemini</option>
                 <option value="perplexity">Perplexity</option>
               </select>
+              <p id="providerHint" class="hint mt-1"></p>
             </div>
             <div>
               <label class="block text-sm font-medium mb-1 text-slate-800">Model (optional)</label>
-              <input name="model" type="text" class="input w-full px-3 py-2" placeholder="auto">
+              <input id="modelInput" name="model" type="text" class="input w-full px-3 py-2" placeholder="auto" list="modelPresets">
+              <datalist id="modelPresets"></datalist>
+              <p id="modelHint" class="hint mt-1"></p>
             </div>
             <div>
               <label class="block text-sm font-medium mb-1 text-slate-800">API key</label>
-              <input name="apiKey" type="password" class="input w-full px-3 py-2" placeholder="sk-..." required>
-              <p class="hint mt-1">Your key is used only for this request and never stored or logged.</p>
+              <input name="apiKey" type="password" class="input w-full px-3 py-2" placeholder="paste your key" required>
+              <p class="hint mt-1">Paste only the token — no “Bearer ”, no spaces. Keys aren’t stored.</p>
             </div>
           </div>
 
@@ -145,10 +157,13 @@
             </label>
           </div>
 
-          <div class="flex gap-3 pt-2">
+          <div class="flex flex-wrap gap-3 pt-2">
             <button id="submitBtn" class="btn btn-primary px-4 py-2 rounded-lg">Generate .pptx</button>
             <button id="previewBtn" type="button" class="btn btn-ghost px-4 py-2 rounded-lg">Preview slide plan</button>
+            <button id="testBtn" type="button" class="btn btn-ghost px-4 py-2 rounded-lg">Test model</button>
+            <span id="testStatus" class="text-sm text-slate-600"></span>
           </div>
+
           <div id="progress" class="hidden mt-3 text-sm text-slate-600">Processing…</div>
         </form>
       </section>
@@ -189,12 +204,12 @@
     const form = document.getElementById('genForm');
     const progress = document.getElementById('progress');
     const previewBtn = document.getElementById('previewBtn');
+    const testBtn = document.getElementById('testBtn');
+    const testStatus = document.getElementById('testStatus');
     const previewPanel = document.getElementById('previewPanel');
     const previewList = document.getElementById('previewList');
 
-    form.addEventListener('submit', () => {
-      progress.classList.remove('hidden');
-    });
+    form.addEventListener('submit', () => { progress.classList.remove('hidden'); });
 
     previewBtn.addEventListener('click', async () => {
       const fd = new FormData(form);
@@ -218,6 +233,94 @@
         alert(e.message);
       } finally {
         progress.classList.add('hidden');
+      }
+    });
+
+    // Test model with a 1-line sample via /preview (no file needed)
+    testBtn.addEventListener('click', async () => {
+      const fd = new FormData(form);
+      fd.set('inputText', 'Write 3 scannable bullets about solar energy.'); // minimal sample
+      fd.set('guidance', 'test slide planning');
+      testStatus.textContent = 'Testing…';
+      testBtn.disabled = true;
+      try {
+        const res = await fetch('/preview', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.ok) {
+          testStatus.textContent = '✅ Model OK';
+        } else {
+          testStatus.textContent = `❌ ${data.error || 'Preview failed'}`;
+        }
+      } catch (e) {
+        testStatus.textContent = `❌ ${e.message}`;
+      } finally {
+        setTimeout(() => { testStatus.textContent=''; testBtn.disabled=false; }, 3000);
+      }
+    });
+
+    /* -------------------------
+       Provider-aware model presets
+       ------------------------- */
+    const providerSelect = document.getElementById('providerSelect');
+    const modelInput     = document.getElementById('modelInput');
+    const modelPresets   = document.getElementById('modelPresets');
+    const providerHint   = document.getElementById('providerHint');
+    const modelHint      = document.getElementById('modelHint');
+
+    const PRESETS = {
+      openai: {
+        models: ["gpt-4o-mini", "gpt-4o"],
+        hint: "If you see quota errors, add billing on OpenAI or switch provider."
+      },
+      anthropic: {
+        models: ["claude-3-5-sonnet-20240620", "claude-3-5-haiku"],
+        hint: "Claude Sonnet = higher quality; Haiku = faster/cheaper."
+      },
+      gemini: {
+        models: ["gemini-1.5-pro", "gemini-1.5-flash"],
+        hint: "Pro = stronger reasoning; Flash = faster/cheaper. Free tier has daily caps."
+      },
+      perplexity: {
+        models: ["sonar-medium-chat", "sonar-small-chat"],
+        hint: "Use *-chat models unless your account has *-online access."
+      },
+      aipipe: {
+        models: ["gpt-4o", "claude-3-5-sonnet", "gemini-1.5-pro"],
+        hint: "AI-Pipe routes to your configured provider behind one key."
+      }
+    };
+
+    function refreshModelPresets() {
+      const key = (providerSelect.value || "").toLowerCase();
+      const set = PRESETS[key] || {models: [], hint: ""};
+      modelPresets.innerHTML = "";
+      set.models.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        modelPresets.appendChild(opt);
+      });
+      modelInput.placeholder = set.models[0] || "auto";
+      providerHint.textContent = key ? `Provider: ${providerSelect.options[providerSelect.selectedIndex].text}` : "";
+      modelHint.textContent = set.hint || "";
+    }
+    providerSelect.addEventListener('change', refreshModelPresets);
+    refreshModelPresets();
+
+    /* -------------------------
+       Theme switcher (CSS vars)
+       ------------------------- */
+    const themeSelect = document.getElementById('themeSelect');
+    themeSelect.addEventListener('change', () => {
+      const r = document.documentElement.style;
+      const t = themeSelect.value;
+      if (t === 'ocean') {
+        r.setProperty('--violet','#6366f1'); r.setProperty('--cyan','#06b6d4'); r.setProperty('--emerald','#22c55e'); r.setProperty('--amber','#38bdf8');
+      } else if (t === 'sunset') {
+        r.setProperty('--violet','#ef4444'); r.setProperty('--cyan','#f97316'); r.setProperty('--emerald','#eab308'); r.setProperty('--amber','#fb7185');
+      } else if (t === 'forest') {
+        r.setProperty('--violet','#14532d'); r.setProperty('--cyan','#16a34a'); r.setProperty('--emerald','#065f46'); r.setProperty('--amber','#84cc16');
+      } else {
+        r.setProperty('--violet','#7c3aed'); r.setProperty('--cyan','#06b6d4'); r.setProperty('--emerald','#10b981'); r.setProperty('--amber','#f59e0b');
       }
     });
   </script>
