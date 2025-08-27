@@ -4,6 +4,17 @@ import requests
 class ProviderError(Exception):
     pass
 
+# Centralized safe defaults per provider (used when model is blank)
+PROVIDER_DEFAULTS = {
+    "openai":      "gpt-4o-mini",
+    "anthropic":   "claude-3-5-sonnet-20240620",
+    "gemini":      "gemini-1.5-pro",
+    "google":      "gemini-1.5-pro",
+    "google-gemini":"gemini-1.5-pro",
+    "perplexity":  "sonar-medium-chat",
+    "aipipe":      "gpt-4o-mini",
+}
+
 SYSTEM_PROMPT = """You are a slide planner. Convert the provided text into a JSON slide plan.
 Follow these rules:
 - Respect the 'guidance' string for tone/structure if provided.
@@ -32,6 +43,8 @@ SOURCE TEXT:
 {input_text}
 """
 
+# ---------- Provider POST helpers ----------
+
 def _post_openai(api_key, model, system, user):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -39,7 +52,7 @@ def _post_openai(api_key, model, system, user):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model or "gpt-4o-mini",
+        "model": model or PROVIDER_DEFAULTS["openai"],
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
@@ -52,16 +65,14 @@ def _post_openai(api_key, model, system, user):
         raise ProviderError(f"OpenAI API error {r.status_code}: {r.text[:200]}")
     data = r.json()
     try:
-        content = data["choices"][0]["message"]["content"]
+        return data["choices"][0]["message"]["content"]
     except Exception:
         raise ProviderError("OpenAI response missing content")
-    return content
 
 def _post_perplexity(api_key, model, system, user):
     """
     Perplexity uses an OpenAI-compatible /chat/completions endpoint.
-    Good default models: 'sonar-small-chat', 'sonar-medium-chat'.
-    The '*-online' models require realtime/search access on your account.
+    Use chat models unless your account has *-online access.
     """
     url = "https://api.perplexity.ai/chat/completions"
     headers = {
@@ -69,13 +80,13 @@ def _post_perplexity(api_key, model, system, user):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model or "sonar-medium-chat",  # safe default
+        "model": model or PROVIDER_DEFAULTS["perplexity"],  # 'sonar-medium-chat'
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ],
         "temperature": 0.2
-        # NOTE: don't set response_format here; Perplexity may not support it yet.
+        # (No response_format; some Perplexity models ignore it.)
     }
     r = requests.post(url, headers=headers, json=payload, timeout=60)
     if r.status_code >= 400:
@@ -87,10 +98,10 @@ def _post_perplexity(api_key, model, system, user):
         raise ProviderError("Perplexity response missing content")
 
 def _post_aipipe(api_key, model, system, user):
-    url = "https://aipipe.org/openai/v1/chat/completions"  # OpenAI-compatible
+    url = "https://aipipe.org/openai/v1/chat/completions"  # OpenAI-compatible proxy
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
-        "model": model or "gpt-4o-mini",
+        "model": model or PROVIDER_DEFAULTS["aipipe"],
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
@@ -115,7 +126,7 @@ def _post_anthropic(api_key, model, system, user):
         "content-type": "application/json"
     }
     payload = {
-        "model": model or "claude-3-5-sonnet-20240620",
+        "model": model or PROVIDER_DEFAULTS["anthropic"],
         "max_tokens": 2000,
         "system": system,
         "messages": [{"role": "user", "content": user}]
@@ -132,12 +143,13 @@ def _post_anthropic(api_key, model, system, user):
     return text
 
 def _post_gemini(api_key, model, system, user):
-    model_name = model or "gemini-1.5-pro"
+    model_name = model or PROVIDER_DEFAULTS["gemini"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     headers = {"content-type": "application/json"}
+    # Concatenate system+user into a single user message; Gemini doesn't use system separately in v1beta.
     prompt = f"{system}\n\nUser Input:\n{user}\n\nReturn STRICT JSON only."
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2}
     }
     r = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -145,24 +157,41 @@ def _post_gemini(api_key, model, system, user):
         raise ProviderError(f"Gemini API error {r.status_code}: {r.text[:200]}")
     data = r.json()
     try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception:
         raise ProviderError("Gemini response missing text content")
-    return text
 
-def _coerce_json(text):
+# ---------- JSON coercion / safety ----------
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
+
+def _coerce_json(text: str):
+    """
+    Accepts raw model text, extracts fenced JSON if present, and parses.
+    Also trims accidental prefix/suffix around a JSON object.
+    """
+    if not isinstance(text, str):
+        raise ProviderError("Provider returned non-text output")
+
     s = text.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```(?:json)?", "", s).strip()
-        s = re.sub(r"```$", "", s).strip()
+
+    # Prefer fenced ```json ... ``` blocks
+    m = _FENCE_RE.search(s)
+    if m:
+        s = m.group(1).strip()
+
+    # If the string doesn't start with '{', try to locate the first JSON object
     if not s.startswith("{"):
-        m = re.search(r"\{.*\}", s, flags=re.S)
-        if m:
-            s = m.group(0)
+        m2 = re.search(r"\{.*\}", s, flags=re.S)
+        if m2:
+            s = m2.group(0).strip()
+
     try:
         return json.loads(s)
     except json.JSONDecodeError as e:
         raise ProviderError(f"Provider returned non-JSON output: {e}")
+
+# ---------- Public entrypoint ----------
 
 def _validate_api_key_like(s: str):
     bad_substrings = [" ", "http", "Bearer ", "provider.lower()", "elif "]
@@ -171,16 +200,18 @@ def _validate_api_key_like(s: str):
 
 def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_notes):
     _validate_api_key_like(api_key)
+    p = (provider or "").lower()
     user = USER_TEMPLATE.format(guidance=guidance or "(none)", input_text=input_text[:15000])
-    if provider.lower() == "openai":
+
+    if p == "openai":
         raw = _post_openai(api_key, model, SYSTEM_PROMPT, user)
-    elif provider.lower() == "anthropic":
+    elif p == "anthropic":
         raw = _post_anthropic(api_key, model, SYSTEM_PROMPT, user)
-    elif provider.lower() in ("google", "gemini", "google-gemini"):
+    elif p in ("google", "gemini", "google-gemini"):
         raw = _post_gemini(api_key, model, SYSTEM_PROMPT, user)
-    elif provider.lower() == "aipipe":
+    elif p == "aipipe":
         raw = _post_aipipe(api_key, model, SYSTEM_PROMPT, user)
-    elif provider.lower() == "perplexity":
+    elif p == "perplexity":
         raw = _post_perplexity(api_key, model, SYSTEM_PROMPT, user)
     else:
         raise ProviderError(f"Unsupported provider: {provider}")
@@ -190,6 +221,7 @@ def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_
     if not isinstance(slides, list) or len(slides) == 0:
         raise ProviderError("No slides returned by provider.")
 
+    # Normalize
     slides = slides[:30]
     if include_notes:
         for s in slides:

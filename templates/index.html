@@ -139,8 +139,11 @@
             </div>
             <div>
               <label class="block text-sm font-medium mb-1 text-slate-800">API key</label>
-              <input name="apiKey" type="password" class="input w-full px-3 py-2" placeholder="paste your key" required>
-              <p class="hint mt-1">Paste only the token — no “Bearer ”, no spaces. Keys aren’t stored.</p>
+              <input id="apiKeyInput" name="apiKey" type="password" class="input w-full px-3 py-2" placeholder="paste your key" required>
+              <p class="hint mt-1">
+                Paste only the token — no “Bearer ”, no spaces. Keys aren’t stored.
+                <span id="apiKeyHint" class="ml-1 text-slate-500"></span>
+              </p>
             </div>
           </div>
 
@@ -180,7 +183,7 @@
 
         <div class="mt-6">
           <h3 class="text-sm font-medium mb-1 text-slate-900">Tips</h3>
-          <ul class="list-disc ml-5 text-sm space-y-1 text-slate-800">
+        <ul class="list-disc ml-5 text-sm space-y-1 text-slate-800">
             <li>Add a one-line guidance like “sales deck”, “research summary”, or “visual-heavy”.</li>
             <li>Use a clean template with clear Title/Content layouts.</li>
             <li>You can deploy this app to Render/Railway in minutes.</li>
@@ -266,33 +269,46 @@
     const modelPresets   = document.getElementById('modelPresets');
     const providerHint   = document.getElementById('providerHint');
     const modelHint      = document.getElementById('modelHint');
+    const apiKeyInput    = document.getElementById('apiKeyInput');
+    const apiKeyHint     = document.getElementById('apiKeyHint');
 
     const PRESETS = {
       openai: {
         models: ["gpt-4o-mini", "gpt-4o"],
-        hint: "If you see quota errors, add billing on OpenAI or switch provider."
+        hint: "If you see quota errors, add billing on OpenAI or switch provider.",
+        keyHint: "Expected key prefix: sk-",
+        keyPlaceholder: "sk-XXXXXXXXXXXXXXXXXXXXXXXX"
       },
       anthropic: {
         models: ["claude-3-5-sonnet-20240620", "claude-3-5-haiku"],
-        hint: "Claude Sonnet = higher quality; Haiku = faster/cheaper."
+        hint: "Claude Sonnet = higher quality; Haiku = faster/cheaper.",
+        keyHint: "Expected key prefix: sk-ant-",
+        keyPlaceholder: "sk-ant-XXXXXXXXXXXXXXXXXXXX"
       },
       gemini: {
         models: ["gemini-1.5-pro", "gemini-1.5-flash"],
-        hint: "Pro = stronger reasoning; Flash = faster/cheaper. Free tier has daily caps."
+        hint: "Pro = stronger reasoning; Flash = faster/cheaper. Free tier has daily caps.",
+        keyHint: "Expected key prefix: AIza… (or long Cloud key)",
+        keyPlaceholder: "AIzaSyA-Your-Gemini-Key"
       },
       perplexity: {
         models: ["sonar-medium-chat", "sonar-small-chat"],
-        hint: "Use *-chat models unless your account has *-online access."
+        hint: "Use *-chat models unless your account has *-online access.",
+        keyHint: "Expected key prefix: pplx-",
+        keyPlaceholder: "pplx-XXXXXXXXXXXXXXXXXXXX"
       },
       aipipe: {
         models: ["gpt-4o", "claude-3-5-sonnet", "gemini-1.5-pro"],
-        hint: "AI-Pipe routes to your configured provider behind one key."
+        hint: "AI-Pipe routes to your configured provider behind one key.",
+        keyHint: "Expected key: JWT-like (eyJ…) or ap_…",
+        keyPlaceholder: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…"
       }
     };
 
     function refreshModelPresets() {
       const key = (providerSelect.value || "").toLowerCase();
-      const set = PRESETS[key] || {models: [], hint: ""};
+      const set = PRESETS[key] || {models: [], hint: "", keyHint: "", keyPlaceholder: "paste your key"};
+      // models datalist
       modelPresets.innerHTML = "";
       set.models.forEach(m => {
         const opt = document.createElement("option");
@@ -302,6 +318,9 @@
       modelInput.placeholder = set.models[0] || "auto";
       providerHint.textContent = key ? `Provider: ${providerSelect.options[providerSelect.selectedIndex].text}` : "";
       modelHint.textContent = set.hint || "";
+      // api key hint + placeholder
+      apiKeyHint.textContent = set.keyHint || "";
+      apiKeyInput.placeholder = set.keyPlaceholder || "paste your key";
     }
     providerSelect.addEventListener('change', refreshModelPresets);
     refreshModelPresets();

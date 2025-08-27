@@ -11,6 +11,39 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20 MB upload limit
 app.config['UPLOAD_EXTENSIONS'] = ['.pptx', '.potx']
 
+# --- Key format validator ---
+def _key_looks_like(provider: str, api_key: str) -> bool:
+    p = (provider or "").lower()
+    k = api_key or ""
+    if p == "openai":
+        return k.startswith("sk-")
+    if p == "anthropic":
+        return k.startswith("sk-ant-")
+    if p in ("google", "gemini", "google-gemini"):
+        return k.startswith("AIza") or len(k) > 25
+    if p == "perplexity":
+        return k.startswith("pplx-")
+    if p == "aipipe":
+        return k.startswith("eyJ") or k.startswith("ap_") or len(k) > 25
+    return True
+
+# --- Same-provider fallback models ---
+def _fallback_models(provider: str, current: str | None):
+    p = (provider or "").lower()
+    c = (current or "").strip()
+    if p == "openai":
+        return [x for x in ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"] if x != c]
+    if p == "anthropic":
+        return [x for x in ["claude-3-5-sonnet-20240620", "claude-3-5-haiku"] if x != c]
+    if p in ("google", "gemini", "google-gemini"):
+        return [x for x in ["gemini-1.5-pro", "gemini-1.5-flash"] if x != c]
+    if p == "perplexity":
+        return [x for x in ["sonar-small-chat", "sonar-medium-chat"] if x != c]
+    if p == "aipipe":
+        return [x for x in ["gpt-4o-mini", "claude-3-5-sonnet", "gemini-1.5-pro"] if x != c]
+    return []
+
+
 # Security headers
 @app.after_request
 def add_security_headers(resp):
@@ -23,6 +56,39 @@ def add_security_headers(resp):
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
+
+def _plan_with_fallback(provider, model, api_key, input_text, guidance, include_notes):
+    """Try main model, then safe same-provider fallbacks."""
+    if not _key_looks_like(provider, api_key):
+        raise ProviderError(f"API key does not look like a {provider} key. Please check.")
+
+    def attempt(m):
+        return plan_slides_via_llm(
+            provider=provider,
+            model=m or None,
+            api_key=api_key,
+            input_text=input_text,
+            guidance=guidance,
+            include_notes=include_notes
+        )
+
+    try:
+        return attempt(model)
+    except ProviderError as e:
+        msg = str(e)
+        candidates = _fallback_models(provider, model)
+        # Special case: Perplexity invalid → force chat models
+        if ("invalid model" in msg.lower() or "not found" in msg.lower()) and provider.lower() == "perplexity":
+            candidates = ["sonar-small-chat", "sonar-medium-chat"]
+
+        last_err = msg
+        for alt in candidates:
+            try:
+                return attempt(alt)
+            except ProviderError as e2:
+                last_err = str(e2)
+        raise ProviderError(last_err)
 
 
 @app.route("/generate", methods=["POST"])
@@ -50,60 +116,13 @@ def generate():
             return jsonify({"ok": False, "error": "Only .pptx or .potx files are supported."}), 400
         template_bytes = f.read()
 
-        # Step 1: Ask LLM for slide plan (with graceful fallbacks)
-        def attempt(p, m=None):
-            return plan_slides_via_llm(
-                provider=p,
-                model=m or (model or None),
-                api_key=api_key,
-                input_text=input_text,
-                guidance=guidance,
-                include_notes=include_notes
-            )
-
-        tried = []
-        slide_plan = None
-        primary = provider.lower()
-
+        # Step 1: Ask LLM
         try:
-            tried.append(primary)
-            slide_plan = attempt(primary)
+            slide_plan = _plan_with_fallback(provider, model, api_key, input_text, guidance, include_notes)
         except ProviderError as e:
-            msg = str(e)
-            fallbacks = []
+            return jsonify({"ok": False, "error": f"LLM provider error ({provider}): {e}"}), 400
 
-            if "quota" in msg.lower() or "429" in msg or "insufficient_quota" in msg.lower():
-                fallbacks = ["perplexity", "aipipe"]
-            elif "invalid model" in msg.lower() and "perplexity" in msg.lower():
-                # try safer Perplexity model
-                try:
-                    tried.append("perplexity")
-                    slide_plan = attempt("perplexity", m="sonar-small-chat")
-                except ProviderError as e2:
-                    msg = str(e2)
-                    slide_plan = None
-                    fallbacks = ["aipipe"]
-            else:
-                fallbacks = ["perplexity", "aipipe"]
-
-            if slide_plan is None:
-                last_err = msg
-                for fb in [p for p in fallbacks if p not in tried]:
-                    tried.append(fb)
-                    try:
-                        slide_plan = attempt(fb)
-                        provider = fb
-                        break
-                    except ProviderError as e3:
-                        last_err = str(e3)
-
-                if slide_plan is None:
-                    return jsonify({
-                        "ok": False,
-                        "error": f"Failed to get a slide plan from LLM (tried {', '.join(tried)}): {last_err}"
-                    }), 400
-
-        # Step 2: Build presentation
+        # Step 2: Build PPTX
         try:
             out_pptx = build_presentation(template_bytes, slide_plan)
         except Exception as e:
@@ -138,63 +157,11 @@ def preview():
         if not api_key:
             return jsonify({"ok": False, "error": "API key is required for the selected provider."}), 400
 
-        # Same fallback strategy as /generate
-        def attempt(p, m=None):
-            return plan_slides_via_llm(
-                provider=p,
-                model=m or (model or None),
-                api_key=api_key,
-                input_text=input_text,
-                guidance=guidance,
-                include_notes=include_notes
-            )
-
-        tried = []
-        slide_plan = None
-        primary = provider.lower()
-
-        try:
-            tried.append(primary)
-            slide_plan = attempt(primary)
-        except ProviderError as e:
-            msg = str(e)
-            fallbacks = []
-
-            if "quota" in msg.lower() or "429" in msg or "insufficient_quota" in msg.lower():
-                fallbacks = ["perplexity", "aipipe"]
-            elif "invalid model" in msg.lower() and "perplexity" in msg.lower():
-                # try safer Perplexity model
-                try:
-                    tried.append("perplexity")
-                    slide_plan = attempt("perplexity", m="sonar-small-chat")
-                except ProviderError as e2:
-                    msg = str(e2)
-                    slide_plan = None
-                    fallbacks = ["aipipe"]
-            else:
-                fallbacks = ["perplexity", "aipipe"]
-
-            if slide_plan is None:
-                last_err = msg
-                for fb in [p for p in fallbacks if p not in tried]:
-                    tried.append(fb)
-                    try:
-                        slide_plan = attempt(fb)
-                        provider = fb
-                        break
-                    except ProviderError as e3:
-                        last_err = str(e3)
-
-                if slide_plan is None:
-                    return jsonify({
-                        "ok": False,
-                        "error": f"Failed to get a slide plan from LLM (tried {', '.join(tried)}): {last_err}"
-                    }), 400
-
+        slide_plan = _plan_with_fallback(provider, model, api_key, input_text, guidance, include_notes)
         return jsonify({"ok": True, "slides": slide_plan})
 
     except ProviderError as e:
-        return jsonify({"ok": False, "error": f"LLM provider error: {e}"}), 400
+        return jsonify({"ok": False, "error": f"LLM provider error ({provider}): {e}"}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": f"Unexpected error: {e}"}), 500
 
