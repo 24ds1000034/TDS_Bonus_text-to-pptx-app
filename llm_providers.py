@@ -58,19 +58,18 @@ def _post_openai(api_key, model, system, user):
     return content
 
 def _post_aipipe(api_key, model, system, user):
-    # ✅ Use the correct base URL from AI-Pipe docs
-    url = "https://api.aipipe.io/v1/chat/completions"  
+    url = "https://aipipe.org/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model or "gpt-4o",  # or whatever you’ve enabled in AI-Pipe
+        "model": model or "gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ],
-        "temperature": 0.2
+        "temperature": 0.2,
     }
     r = requests.post(url, headers=headers, json=payload, timeout=60)
     if r.status_code >= 400:
