@@ -6,13 +6,13 @@ class ProviderError(Exception):
 
 # Centralized safe defaults per provider (used when model is blank)
 PROVIDER_DEFAULTS = {
-    "openai":      "gpt-4o-mini",
-    "anthropic":   "claude-3-5-sonnet-20240620",
-    "gemini":      "gemini-1.5-pro",
-    "google":      "gemini-1.5-pro",
+    "openai":       "gpt-4o-mini",
+    "anthropic":    "claude-3-5-sonnet-20240620",
+    "gemini":       "gemini-1.5-pro",
+    "google":       "gemini-1.5-pro",
     "google-gemini":"gemini-1.5-pro",
-    "perplexity":  "sonar-medium-chat",
-    "aipipe":      "gpt-4o-mini",
+    "perplexity":   "sonar",            # current, valid default
+    "aipipe":       "gpt-4o-mini",
 }
 
 SYSTEM_PROMPT = """You are a slide planner. Convert the provided text into a JSON slide plan.
@@ -72,7 +72,8 @@ def _post_openai(api_key, model, system, user):
 def _post_perplexity(api_key, model, system, user):
     """
     Perplexity uses an OpenAI-compatible /chat/completions endpoint.
-    Use chat models unless your account has *-online access.
+    Supported Sonar IDs include: 'sonar', 'sonar-pro', 'sonar-reasoning',
+    'sonar-reasoning-pro', 'sonar-deep-research'.
     """
     url = "https://api.perplexity.ai/chat/completions"
     headers = {
@@ -80,13 +81,13 @@ def _post_perplexity(api_key, model, system, user):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model or PROVIDER_DEFAULTS["perplexity"],  # 'sonar-medium-chat'
+        "model": model or PROVIDER_DEFAULTS["perplexity"],  # 'sonar'
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ],
         "temperature": 0.2
-        # (No response_format; some Perplexity models ignore it.)
+        # Do NOT set response_format here; some models ignore/complain.
     }
     r = requests.post(url, headers=headers, json=payload, timeout=60)
     if r.status_code >= 400:
@@ -98,8 +99,13 @@ def _post_perplexity(api_key, model, system, user):
         raise ProviderError("Perplexity response missing content")
 
 def _post_aipipe(api_key, model, system, user):
-    url = "https://aipipe.org/openai/v1/chat/completions"  # OpenAI-compatible proxy
+    """
+    AI-Pipe proxy is OpenAI-compatible but some routes 400 if response_format is used.
+    We'll try once WITH response_format, and if 400, retry WITHOUT it.
+    """
+    url = "https://aipipe.org/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
     payload = {
         "model": model or PROVIDER_DEFAULTS["aipipe"],
         "messages": [
@@ -107,9 +113,14 @@ def _post_aipipe(api_key, model, system, user):
             {"role": "user", "content": user}
         ],
         "temperature": 0.2,
-        "response_format": {"type": "json_object"}
+        "response_format": {"type": "json_object"},
     }
     r = requests.post(url, headers=headers, json=payload, timeout=60)
+    if r.status_code == 400:
+        # Retry without response_format
+        payload.pop("response_format", None)
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+
     if r.status_code >= 400:
         raise ProviderError(f"AI-Pipe API error {r.status_code}: {r.text[:200]}")
     data = r.json()
@@ -164,18 +175,21 @@ def _post_gemini(api_key, model, system, user):
 # ---------- JSON coercion / safety ----------
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)  # Perplexity reasoning preamble
 
 def _coerce_json(text: str):
     """
-    Accepts raw model text, extracts fenced JSON if present, and parses.
-    Also trims accidental prefix/suffix around a JSON object.
+    Accepts raw model text, extracts fenced JSON if present, strips Perplexity <think> blocks,
+    and parses JSON. Also trims accidental prefix/suffix around a JSON object.
     """
     if not isinstance(text, str):
         raise ProviderError("Provider returned non-text output")
 
     s = text.strip()
+    # Remove Perplexity <think>...</think> if present
+    s = _THINK_RE.sub("", s)
 
-    # Prefer fenced ```json ... ``` blocks
+    # Prefer fenced ```json ... ``` or ``` ... ``` blocks
     m = _FENCE_RE.search(s)
     if m:
         s = m.group(1).strip()
