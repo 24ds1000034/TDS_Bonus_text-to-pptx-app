@@ -58,13 +58,14 @@ def _post_openai(api_key, model, system, user):
     return content
 
 def _post_aipipe(api_key, model, system, user):
-    url = "https://api.ai-pipe.com/v1/chat/completions"
+    # ✅ Use the correct base URL from AI-Pipe docs
+    url = "https://api.aipipe.io/v1/chat/completions"  
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model or "gpt-4o",  # AI-Pipe lets you pick
+        "model": model or "gpt-4o",  # or whatever you’ve enabled in AI-Pipe
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
