@@ -58,11 +58,8 @@ def _post_openai(api_key, model, system, user):
     return content
 
 def _post_aipipe(api_key, model, system, user):
-    url = "https://aipipe.org/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    url = "https://aipipe.org/openai/v1/chat/completions"  # OpenAI-compatible
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         "model": model or "gpt-4o-mini",
         "messages": [
@@ -70,6 +67,7 @@ def _post_aipipe(api_key, model, system, user):
             {"role": "user", "content": user}
         ],
         "temperature": 0.2,
+        "response_format": {"type": "json_object"}
     }
     r = requests.post(url, headers=headers, json=payload, timeout=60)
     if r.status_code >= 400:
@@ -136,6 +134,11 @@ def _coerce_json(text):
         return json.loads(s)
     except json.JSONDecodeError as e:
         raise ProviderError(f"Provider returned non-JSON output: {e}")
+
+def _validate_api_key_like(s: str):
+    bad_substrings = [" ", "http", "Bearer ", "provider.lower()", "elif "]
+    if not s or any(x in s for x in bad_substrings) or len(s) < 20:
+        raise ProviderError("API key looks invalid. Paste only your provider token (no quotes/Bearer/spaces).")
 
 def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_notes):
     user = USER_TEMPLATE.format(guidance=guidance or "(none)", input_text=input_text[:15000])
