@@ -57,6 +57,35 @@ def _post_openai(api_key, model, system, user):
         raise ProviderError("OpenAI response missing content")
     return content
 
+def _post_perplexity(api_key, model, system, user):
+    """
+    Perplexity uses an OpenAI-compatible /chat/completions endpoint.
+    Good default models: 'sonar-small-chat', 'sonar-medium-chat'.
+    The '*-online' models require realtime/search access on your account.
+    """
+    url = "https://api.perplexity.ai/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model or "sonar-medium-chat",  # safe default
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ],
+        "temperature": 0.2
+        # NOTE: don't set response_format here; Perplexity may not support it yet.
+    }
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
+    if r.status_code >= 400:
+        raise ProviderError(f"Perplexity API error {r.status_code}: {r.text[:200]}")
+    data = r.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except Exception:
+        raise ProviderError("Perplexity response missing content")
+
 def _post_aipipe(api_key, model, system, user):
     url = "https://aipipe.org/openai/v1/chat/completions"  # OpenAI-compatible
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -141,6 +170,7 @@ def _validate_api_key_like(s: str):
         raise ProviderError("API key looks invalid. Paste only your provider token (no quotes/Bearer/spaces).")
 
 def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_notes):
+    _validate_api_key_like(api_key)
     user = USER_TEMPLATE.format(guidance=guidance or "(none)", input_text=input_text[:15000])
     if provider.lower() == "openai":
         raw = _post_openai(api_key, model, SYSTEM_PROMPT, user)
@@ -150,6 +180,8 @@ def plan_slides_via_llm(provider, model, api_key, input_text, guidance, include_
         raw = _post_gemini(api_key, model, SYSTEM_PROMPT, user)
     elif provider.lower() == "aipipe":
         raw = _post_aipipe(api_key, model, SYSTEM_PROMPT, user)
+    elif provider.lower() == "perplexity":
+        raw = _post_perplexity(api_key, model, SYSTEM_PROMPT, user)
     else:
         raise ProviderError(f"Unsupported provider: {provider}")
 
